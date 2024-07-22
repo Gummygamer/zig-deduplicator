@@ -45,24 +45,34 @@ fn parseArgs(allocator: std.mem.Allocator) !Config {
     return config;
 }
 
-fn scanDirectory(dir: std.fs.Dir, config: Config, hashes: *std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage), duplicates: *std.ArrayList([]const u8)) !void {
+fn scanDirectory(dir: std.fs.Dir, config: Config, hashes: *std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage)) !void {
     var iterator = dir.iterate();
     const openOptions = std.fs.Dir.OpenDirOptions{ .access_sub_paths = true, .iterate = true, .no_follow = false };
     const openFlags = std.fs.File.OpenFlags{ .mode = .read_write };
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     while (true) {
         const entry = try iterator.next() orelse break;
         if (entry.kind == std.fs.File.Kind.directory) {
             var subdir = try std.fs.Dir.openDir(dir, entry.name, openOptions);
             defer subdir.close();
-            try scanDirectory(subdir, config, hashes, duplicates);
+            try scanDirectory(subdir, config, hashes);
         } else {
-            const file = try std.fs.openFileAbsolute(entry.name, openFlags);
+            const absolute_path = try dir.realpathAlloc(allocator, entry.name);
+            defer allocator.free(absolute_path);
+
+            std.debug.print("entry.name = {s}\n", .{entry.name});
+
+            const file = try std.fs.openFileAbsolute(absolute_path, openFlags);
             const file_hash = try calculateFileHash(file);
-            if (hashes.contains(file_hash)) {
-                try duplicates.append(entry.name);
+            const result = try hashes.getOrPut(file_hash);
+            if (!result.found_existing) {
+                result.value_ptr.* = entry.name;
             } else {
-                try hashes.put(file_hash, entry.name);
+                try handleDuplicate(dir, entry.name, config);
             }
         }
     }
@@ -88,34 +98,39 @@ fn calculateFileHash(file: std.fs.File) ![]u8 {
     return &hash;
 }
 
-fn handleDuplicates(duplicates: std.ArrayList([]const u8), config: Config) !void {
-    for (duplicates.items) |duplicate_path| {
-        std.debug.print("Handling duplicate: {s}\n", .{duplicate_path});
+fn handleDuplicate(dir: std.fs.Dir, path: []const u8, config: Config) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
-        switch (config.action) {
-            .Delete => {
-                std.debug.print("Deleting file: {s}\n", .{duplicate_path});
-                std.fs.deleteFileAbsolute(duplicate_path) catch |err| {
-                    std.debug.print("Error deleting file: {}\n", .{err});
+    const absolute_path = try dir.realpathAlloc(allocator, path);
+    defer allocator.free(absolute_path);
+
+    std.debug.print("Handling duplicate: {s}\n", .{path});
+
+    switch (config.action) {
+        .Delete => {
+            std.debug.print("Deleting file: {s}\n", .{absolute_path});
+            std.fs.deleteFileAbsolute(absolute_path) catch |err| {
+                std.debug.print("Error deleting file: {}\n", .{err});
+                return err;
+            };
+        },
+        .Move => {
+            if (config.move_path) |move_path| {
+                const file_name = std.fs.path.basename(path);
+                const destination = try std.fs.path.join(std.heap.page_allocator, &[_][]const u8{ move_path, file_name });
+                defer std.heap.page_allocator.free(destination);
+
+                std.debug.print("Moving file from {s} to {s}\n", .{ path, destination });
+                std.fs.renameAbsolute(absolute_path, destination) catch |err| {
+                    std.debug.print("Error moving file: {}\n", .{err});
                     return err;
                 };
-            },
-            .Move => {
-                if (config.move_path) |move_path| {
-                    const file_name = std.fs.path.basename(duplicate_path);
-                    const destination = try std.fs.path.join(std.heap.page_allocator, &[_][]const u8{ move_path, file_name });
-                    defer std.heap.page_allocator.free(destination);
-
-                    std.debug.print("Moving file from {s} to {s}\n", .{ duplicate_path, destination });
-                    std.fs.renameAbsolute(duplicate_path, destination) catch |err| {
-                        std.debug.print("Error moving file: {}\n", .{err});
-                        return err;
-                    };
-                } else {
-                    return error.MissingMovePath;
-                }
-            },
-        }
+            } else {
+                return error.MissingMovePath;
+            }
+        },
     }
 }
 
@@ -136,10 +151,8 @@ pub fn main() !void {
     defer dir.close();
 
     if (config.action == .Delete) {
-        try scanDirectory(dir, config, &hashes, &duplicates);
+        try scanDirectory(dir, config, &hashes);
     } else if (config.action == .Move) {
-        try scanDirectory(dir, config, &hashes, &duplicates);
+        try scanDirectory(dir, config, &hashes);
     }
-
-    try handleDuplicates(duplicates, config);
 }
