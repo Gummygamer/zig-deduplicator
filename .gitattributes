@@ -1,0 +1,44 @@
+# Set default behavior to automatically normalize line endings.
+* text=auto
+
+# Explicitly declare text files you want to always be normalized and converted
+# to native line endings on checkout.
+*.zig text=auto eof=lf
+*.md text
+*.txt text
+*.toml text
+*.yaml text
+*.yml text
+
+# Mark binary files to be treated as binary and not text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.bz2 binary
+*.xz binary
+*.7z binary
+*.pdf binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+
+# Custom diff driver for Zig files (optional)
+# If you have a custom diff tool for Zig, configure it here.
+#*.zig diff=zig
+
+# Handle linguist language classification
+*.zig linguist-language=Zig
+
+# Merge strategies for specific files
+*.lock merge=union
+
+# Exclude dependencies and build artifacts from linguist's statistics
+/vendor/ linguist-vendored
+/zig-out/ linguist-generated
+/zig-cache/ linguist-generated
