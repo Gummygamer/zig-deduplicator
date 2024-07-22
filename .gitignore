@@ -1,6 +1,6 @@
 # Ignore build directories
 zig-out/
-zig-cache/
+.zig-cache/
 
 # Ignore binary files
 *.o
